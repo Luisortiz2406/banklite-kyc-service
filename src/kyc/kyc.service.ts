@@ -1,5 +1,13 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
+import { createHash, randomBytes, timingSafeEqual } from 'crypto';
 import { Repository } from 'typeorm';
 import { EventPublisherService } from '../events/event-publisher.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
@@ -8,6 +16,16 @@ import { KycRecord } from './entities/kyc-record.entity';
 import { VerifikService } from './verifik.service';
 
 const EDAD_MINIMA = 18;
+
+// En modo live solo se aprueba si el documento pasa las DOS consultas de Verifik:
+// cédula (CC, PPT) y antecedentes (CC, CE). Hoy la única intersección es CC.
+const TIPOS_VERIFICABLES_LIVE = ['CC'];
+
+type PublicKycRecord = Omit<KycRecord, 'submissionTokenHash'>;
+type SubmitResult = PublicKycRecord & {
+  provider?: IdentityProviderResult;
+  submissionToken?: string;
+};
 
 interface IdentityProviderResult {
   verified: boolean;
@@ -21,7 +39,29 @@ export class KycService {
     @InjectRepository(KycRecord) private readonly records: Repository<KycRecord>,
     private readonly events: EventPublisherService,
     private readonly verifik: VerifikService,
+    private readonly config: ConfigService,
   ) {}
+
+  private hashToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private tokenMatches(token: string | undefined, hash: string | null): boolean {
+    if (!token || !hash) return false;
+    const a = Buffer.from(this.hashToken(token));
+    const b = Buffer.from(hash);
+    return a.length === b.length && timingSafeEqual(a, b);
+  }
+
+  /** Quita el hash del token antes de devolver el registro. */
+  private publicRecord(record: KycRecord): PublicKycRecord {
+    const { submissionTokenHash: _omit, ...rest } = record;
+    return rest;
+  }
+
+  private isLiveMode(): boolean {
+    return (this.config.get<string>('VERIFIK_MODE') || 'demo').toLowerCase() === 'live';
+  }
 
   /**
    * POST /kyc/submit
@@ -40,56 +80,67 @@ export class KycService {
    * Si ambas pasan, marca la verificación como aprobada y publica
    * identity.verified para que Account Service active la cuenta.
    */
-  async submit(
-    dto: SubmitKycDto,
-  ): Promise<KycRecord & { provider?: IdentityProviderResult }> {
-    this.validarMayoriaDeEdad(dto.fechaNacimiento);
-    this.validarFechaExpedicion(dto.fechaNacimiento, dto.fechaExpedicion);
+  async submit(dto: SubmitKycDto): Promise<SubmitResult> {
+    const { submissionToken, ...datos } = dto;
+    this.validarMayoriaDeEdad(datos.fechaNacimiento);
+    this.validarFechaExpedicion(datos.fechaNacimiento, datos.fechaExpedicion);
+
+    if (this.isLiveMode() && !TIPOS_VERIFICABLES_LIVE.includes(datos.tipoDocumento)) {
+      throw new BadRequestException(
+        `Por ahora solo podemos verificar en línea estos documentos: ${TIPOS_VERIFICABLES_LIVE.join(', ')}.`,
+      );
+    }
+
+    // Registro previo de este idUser (con el hash del token, que no se carga por defecto).
+    const previo = await this.records
+      .createQueryBuilder('r')
+      .addSelect('r.submissionTokenHash')
+      .where('r.idUser = :idUser', { idUser: datos.idUser })
+      .getOne();
+    if (previo) {
+      if (!previo.submissionTokenHash) {
+        // Registro anterior a los tokens: si ya está verificado no se puede reescribir.
+        if (previo.status === 'verified') {
+          throw new ConflictException('La identidad de este usuario ya fue verificada.');
+        }
+      } else if (!this.tokenMatches(submissionToken, previo.submissionTokenHash)) {
+        throw new ForbiddenException('No puedes modificar la verificación de identidad de este usuario.');
+      }
+    }
+    // Token nuevo solo si el registro aún no tiene uno; en reenvíos se conserva.
+    const nuevoToken = previo?.submissionTokenHash ? undefined : randomBytes(32).toString('hex');
+    const tokenHash = nuevoToken ? this.hashToken(nuevoToken) : previo?.submissionTokenHash ?? null;
 
     // Un documento solo puede estar asociado a una cuenta. La restricción
     // UNIQUE en la BD refuerza esta validación ante registros simultáneos.
     const documentoExistente = await this.records.findOne({
-      where: { numeroDocumento: dto.numeroDocumento },
+      where: { numeroDocumento: datos.numeroDocumento },
     });
-    if (documentoExistente && documentoExistente.idUser !== dto.idUser) {
+    if (documentoExistente && documentoExistente.idUser !== datos.idUser) {
       throw new ConflictException('El número de documento ya está registrado en otra cuenta.');
     }
 
-    if (dto.telefono?.trim()) {
-      const telefonoExistente = await this.records.findOne({ where: { telefono: dto.telefono.trim() } });
-      if (telefonoExistente && telefonoExistente.idUser !== dto.idUser && telefonoExistente.status === 'verified') {
+    if (datos.telefono?.trim()) {
+      const telefonoExistente = await this.records.findOne({ where: { telefono: datos.telefono.trim() } });
+      if (telefonoExistente && telefonoExistente.idUser !== datos.idUser && telefonoExistente.status === 'verified') {
         throw new ConflictException('Numero de telefono registrado en otra cuenta ');
       }
     }
 
-    const provider = await this.verificarIdentidad(dto);
+    const provider = await this.verificarIdentidad(datos);
+    const status = provider.verified ? ('verified' as const) : ('rejected' as const);
+
+    let record: KycRecord = previo ?? this.records.create({ ...datos, status });
+    Object.assign(record, datos, { status, submissionTokenHash: tokenHash });
+    record = await this.saveRecord(record);
 
     if (!provider.verified) {
-      let rejected = await this.records.findOne({ where: { idUser: dto.idUser } });
-      if (!rejected) rejected = this.records.create({ ...dto, status: 'rejected' });
-      else Object.assign(rejected, dto, { status: 'rejected' as const });
-      const saved = await this.records.save(rejected);
-      return { ...saved, provider };
-    }
-
-    let record = await this.records.findOne({ where: { idUser: dto.idUser } });
-    if (record) {
-      Object.assign(record, dto, { status: 'verified' as const });
-    } else {
-      record = this.records.create({ ...dto, status: 'verified' });
-    }
-    try {
-      record = await this.records.save(record);
-    } catch (error) {
-      // PostgreSQL unique violation (23505) for documento duplicado.
-      if ((error as any)?.code === '23505') {
-        const detail = String((error as any)?.detail || '');
-        if (detail.includes('telefono')) {
-          throw new ConflictException('Numero de telefono registrado en otra cuenta ');
-        }
-        throw new ConflictException('El número de documento ya está registrado en otra cuenta.');
-      }
-      throw error;
+      await this.events.publish('identity.rejected', {
+        idUser: record.idUser,
+        email: record.email,
+        nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
+      });
+      return { ...this.publicRecord(record), provider, submissionToken: nuevoToken };
     }
 
     await this.events.publish('identity.verified', {
@@ -100,9 +151,26 @@ export class KycService {
       nombreCompleto: provider.document.nombreCompleto,
       nivelRiesgo: provider.background.nivelRiesgo,
       alertas: provider.background.alertas,
+      email: record.email,
     });
 
-    return { ...record, provider };
+    return { ...this.publicRecord(record), provider, submissionToken: nuevoToken };
+  }
+
+  /** Guarda traduciendo las violaciones de unicidad (documento / teléfono) a 409. */
+  private async saveRecord(record: KycRecord): Promise<KycRecord> {
+    try {
+      return await this.records.save(record);
+    } catch (error) {
+      if ((error as any)?.code === '23505') {
+        const detail = String((error as any)?.detail || '');
+        if (detail.includes('telefono')) {
+          throw new ConflictException('Numero de telefono registrado en otra cuenta ');
+        }
+        throw new ConflictException('El número de documento ya está registrado en otra cuenta.');
+      }
+      throw error;
+    }
   }
 
   /**
@@ -111,7 +179,7 @@ export class KycService {
    * no tiene sentido gastar la segunda consulta. La identidad solo queda
    * "verified" si ambas se aprueban.
    */
-  private async verificarIdentidad(dto: SubmitKycDto): Promise<IdentityProviderResult> {
+  private async verificarIdentidad(dto: Omit<SubmitKycDto, 'submissionToken'>): Promise<IdentityProviderResult> {
     const nombreCompleto = `${dto.nombres} ${dto.apellidos}`.trim();
 
     const verifikResult = await this.verifik.verifyDocument(
@@ -179,9 +247,20 @@ export class KycService {
       throw new NotFoundException('No se encontro verificacion de identidad para este usuario');
     }
 
+    const emailAnterior = record.email;
     if (dto.email !== undefined) record.email = dto.email.trim().toLowerCase();
     if (dto.telefono !== undefined) record.telefono = dto.telefono.trim();
-    await this.records.save(record);
+    await this.saveRecord(record);
+
+    // La identidad se verifica antes de conocer el correo, así que la confirmación
+    // por email se envía cuando llega el correo verificado (solo si cambió).
+    if (record.status === 'verified' && record.email && record.email !== emailAnterior) {
+      await this.events.publish('identity.email_confirmed', {
+        idUser: record.idUser,
+        email: record.email,
+        nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
+      });
+    }
     return { idUser: record.idUser, email: record.email, telefono: record.telefono };
   }
 

@@ -56,4 +56,9 @@ export class SubmitKycDto {
   @IsOptional()
   @IsString()
   telefono?: string;
+
+  // Token recibido en el primer envío; obligatorio para reenviar datos del mismo idUser.
+  @IsOptional()
+  @IsString()
+  submissionToken?: string;
 }

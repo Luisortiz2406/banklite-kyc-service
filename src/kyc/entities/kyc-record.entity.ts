@@ -60,6 +60,12 @@ export class KycRecord {
   })
   status: 'verified' | 'rejected';
 
+  // Hash SHA-256 del token que se entrega al primer envío de /kyc/submit.
+  // Los reenvíos para el mismo idUser deben presentarlo, así nadie más puede
+  // sobrescribir los datos de otra persona. select:false: nunca sale en respuestas.
+  @Column({ name: 'submission_token_hash', type: 'varchar', nullable: true, select: false })
+  submissionTokenHash: string | null;
+
   @CreateDateColumn({ name: 'created_at' })
   createdAt: Date;
 
