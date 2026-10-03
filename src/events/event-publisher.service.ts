@@ -2,7 +2,7 @@ import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/commo
 import { ConfigService } from '@nestjs/config';
 import { InjectDataSource } from '@nestjs/typeorm';
 import * as amqplib from 'amqplib';
-import { DataSource } from 'typeorm';
+import { DataSource, EntityManager } from 'typeorm';
 import { EventOutbox } from './event-outbox.entity';
 
 const RECONNECT_DELAY_MS = 5000;
@@ -103,11 +103,28 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
     await this.connection?.close().catch(() => undefined);
   }
 
-  /** Guarda el evento en el outbox y dispara su publicación sin esperarla. */
-  async publish(routingKey: string, payload: Record<string, unknown>) {
-    const repo = this.dataSource.getRepository(EventOutbox);
+  /**
+   * Guarda el evento en el outbox. Con `manager`, se guarda dentro de esa
+   * transacción (el evento existe si y solo si el cambio de negocio se
+   * confirmó); el llamador debe invocar flush() después del commit. Sin
+   * `manager`, se guarda y se publica de inmediato.
+   */
+  async publish(routingKey: string, payload: Record<string, unknown>, manager?: EntityManager) {
+    const repo = (manager ?? this.dataSource.manager).getRepository(EventOutbox);
     await repo.save(repo.create({ routingKey, payload, occurredAt: new Date() }));
-    void this.flush();
+    if (!manager) void this.flush();
+  }
+
+  /** Estado del outbox para el panel administrativo. */
+  async stats() {
+    const [row] = await this.dataSource.query(
+      `SELECT COUNT(*) FILTER (WHERE published_at IS NULL)::int AS pending,
+              MIN(created_at) FILTER (WHERE published_at IS NULL) AS "oldestPending",
+              COUNT(*) FILTER (WHERE published_at IS NULL AND attempts > 0)::int AS failing,
+              COUNT(*) FILTER (WHERE published_at > now() - interval '24 hours')::int AS "publishedLast24h"
+         FROM event_outbox`,
+    );
+    return { ...row, brokerConnected: this.channel !== null };
   }
 
   /** Publica los eventos pendientes en orden; se detiene en el primer fallo y reintenta después. */

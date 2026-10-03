@@ -8,7 +8,7 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { createHash, randomBytes, timingSafeEqual } from 'crypto';
-import { Repository } from 'typeorm';
+import { Repository, EntityManager } from 'typeorm';
 import { EventPublisherService } from '../events/event-publisher.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
@@ -132,35 +132,38 @@ export class KycService {
 
     let record: KycRecord = previo ?? this.records.create({ ...datos, status });
     Object.assign(record, datos, { status, submissionTokenHash: tokenHash });
-    record = await this.saveRecord(record);
-
-    if (!provider.verified) {
-      await this.events.publish('identity.rejected', {
-        idUser: record.idUser,
-        email: record.email,
-        nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
-      });
-      return { ...this.publicRecord(record), provider, submissionToken: nuevoToken };
-    }
-
-    await this.events.publish('identity.verified', {
-      idUser: record.idUser,
-      numeroDocumento: record.numeroDocumento,
-      documentProvider: provider.document.provider,
-      backgroundProvider: provider.background.provider,
-      nombreCompleto: provider.document.nombreCompleto,
-      nivelRiesgo: provider.background.nivelRiesgo,
-      alertas: provider.background.alertas,
-      email: record.email,
+    // Registro y evento en la misma transacción (outbox transaccional).
+    record = await this.records.manager.transaction(async (manager) => {
+      const saved = await this.saveRecord(record, manager);
+      if (!provider.verified) {
+        await this.events.publish('identity.rejected', {
+          idUser: saved.idUser,
+          email: saved.email,
+          nombreCompleto: `${saved.nombres} ${saved.apellidos}`.trim(),
+        }, manager);
+      } else {
+        await this.events.publish('identity.verified', {
+          idUser: saved.idUser,
+          numeroDocumento: saved.numeroDocumento,
+          documentProvider: provider.document.provider,
+          backgroundProvider: provider.background.provider,
+          nombreCompleto: provider.document.nombreCompleto,
+          nivelRiesgo: provider.background.nivelRiesgo,
+          alertas: provider.background.alertas,
+          email: saved.email,
+        }, manager);
+      }
+      return saved;
     });
+    void this.events.flush();
 
     return { ...this.publicRecord(record), provider, submissionToken: nuevoToken };
   }
 
   /** Guarda traduciendo las violaciones de unicidad (documento / teléfono) a 409. */
-  private async saveRecord(record: KycRecord): Promise<KycRecord> {
+  private async saveRecord(record: KycRecord, manager?: EntityManager): Promise<KycRecord> {
     try {
-      return await this.records.save(record);
+      return await (manager ? manager.getRepository(KycRecord) : this.records).save(record);
     } catch (error) {
       if ((error as any)?.code === '23505') {
         const detail = String((error as any)?.detail || '');
@@ -250,17 +253,19 @@ export class KycService {
     const emailAnterior = record.email;
     if (dto.email !== undefined) record.email = dto.email.trim().toLowerCase();
     if (dto.telefono !== undefined) record.telefono = dto.telefono.trim();
-    await this.saveRecord(record);
-
-    // La identidad se verifica antes de conocer el correo, así que la confirmación
-    // por email se envía cuando llega el correo verificado (solo si cambió).
-    if (record.status === 'verified' && record.email && record.email !== emailAnterior) {
-      await this.events.publish('identity.email_confirmed', {
-        idUser: record.idUser,
-        email: record.email,
-        nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
-      });
-    }
+    await this.records.manager.transaction(async (manager) => {
+      await this.saveRecord(record, manager);
+      // La identidad se verifica antes de conocer el correo, así que la confirmación
+      // por email se envía cuando llega el correo verificado (solo si cambió).
+      if (record.status === 'verified' && record.email && record.email !== emailAnterior) {
+        await this.events.publish('identity.email_confirmed', {
+          idUser: record.idUser,
+          email: record.email,
+          nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
+        }, manager);
+      }
+    });
+    void this.events.flush();
     return { idUser: record.idUser, email: record.email, telefono: record.telefono };
   }
 
