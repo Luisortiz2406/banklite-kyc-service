@@ -1,8 +1,13 @@
 import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { InjectDataSource } from '@nestjs/typeorm';
 import * as amqplib from 'amqplib';
+import { DataSource } from 'typeorm';
+import { EventOutbox } from './event-outbox.entity';
 
 const RECONNECT_DELAY_MS = 5000;
+const RELAY_INTERVAL_MS = 5000;
+const BATCH_SIZE = 50;
 
 /**
  * Publica eventos de dominio en el exchange 'banklite.events' (RabbitMQ),
@@ -13,25 +18,32 @@ const RECONNECT_DELAY_MS = 5000;
  * este servicio publica identity.verified y Account Service lo consume
  * para activar la cuenta pendiente (3.3 del documento).
  *
- * Si RabbitMQ no está disponible, el servicio sigue funcionando en modo
- * "degradado": los eventos solo se registran en log, para no bloquear
- * el flujo transaccional principal (envío de datos de KYC). Mientras tanto se
- * reintenta la conexión en segundo plano, también si se cae después de arrancar.
+ * Patrón outbox: publish() guarda el evento en event_outbox y un relevo lo
+ * envía con confirmación del broker. Si RabbitMQ no está disponible, el
+ * servicio sigue funcionando (el envío de datos de KYC no se bloquea) y los eventos
+ * esperan en la tabla hasta que vuelva la conexión, que se reintenta en
+ * segundo plano.
  */
 @Injectable()
 export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger('EventPublisher[kyc-service]');
   private connection: amqplib.ChannelModel | null = null;
-  private channel: amqplib.Channel | null = null;
+  private channel: amqplib.ConfirmChannel | null = null;
   private reconnectTimer: NodeJS.Timeout | null = null;
+  private relayTimer: NodeJS.Timeout | null = null;
+  private flushing = false;
   private destroyed = false;
   private readonly exchange: string;
 
-  constructor(private readonly config: ConfigService) {
+  constructor(
+    private readonly config: ConfigService,
+    @InjectDataSource() private readonly dataSource: DataSource,
+  ) {
     this.exchange = this.config.get<string>('RABBITMQ_EXCHANGE', 'banklite.events');
   }
 
   async onModuleInit() {
+    this.relayTimer = setInterval(() => void this.flush(), RELAY_INTERVAL_MS);
     await this.connect();
   }
 
@@ -39,7 +51,7 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
     if (this.destroyed) return;
     const url = this.config.get<string>('RABBITMQ_URL');
     if (!url) {
-      this.logger.warn('RABBITMQ_URL no configurada. Eventos solo se registrarán en log.');
+      this.logger.warn('RABBITMQ_URL no configurada. Los eventos quedarán en el outbox.');
       return;
     }
     try {
@@ -52,7 +64,7 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
         this.channel = null;
         this.scheduleReconnect();
       });
-      const channel = await connection.createChannel();
+      const channel = await connection.createConfirmChannel();
       channel.on('error', (err) => this.logger.warn(`Error en el canal de RabbitMQ: ${err.message}`));
       channel.on('close', () => {
         this.channel = null;
@@ -62,9 +74,10 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
       await channel.assertExchange(this.exchange, 'topic', { durable: true });
       this.channel = channel;
       this.logger.log(`Conectado a RabbitMQ, exchange '${this.exchange}' listo.`);
+      void this.flush();
     } catch (err) {
       this.logger.warn(
-        `No se pudo conectar a RabbitMQ (${(err as Error).message}). Modo degradado; reintentando en ${RECONNECT_DELAY_MS / 1000}s.`,
+        `No se pudo conectar a RabbitMQ (${(err as Error).message}). Los eventos esperan en el outbox; reintentando en ${RECONNECT_DELAY_MS / 1000}s.`,
       );
       // Si la conexión abrió pero falló el canal, se cierra para no dejarla colgada.
       await this.connection?.close().catch(() => undefined);
@@ -85,32 +98,69 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() {
     this.destroyed = true;
     if (this.reconnectTimer) clearTimeout(this.reconnectTimer);
+    if (this.relayTimer) clearInterval(this.relayTimer);
     await this.channel?.close().catch(() => undefined);
     await this.connection?.close().catch(() => undefined);
   }
 
+  /** Guarda el evento en el outbox y dispara su publicación sin esperarla. */
   async publish(routingKey: string, payload: Record<string, unknown>) {
-    const message = {
-      event: routingKey,
-      occurredAt: new Date().toISOString(),
-      data: payload,
-    };
+    const repo = this.dataSource.getRepository(EventOutbox);
+    await repo.save(repo.create({ routingKey, payload, occurredAt: new Date() }));
+    void this.flush();
+  }
 
-    if (!this.channel) {
-      this.logger.log(`[degradado] evento '${routingKey}': ${JSON.stringify(message)}`);
-      return;
-    }
-
+  /** Publica los eventos pendientes en orden; se detiene en el primer fallo y reintenta después. */
+  async flush() {
+    if (this.flushing || !this.channel) return;
+    this.flushing = true;
     try {
-      this.channel.publish(
-        this.exchange,
-        routingKey,
-        Buffer.from(JSON.stringify(message)),
-        { persistent: true, contentType: 'application/json' },
-      );
-      this.logger.log(`Evento publicado: ${routingKey}`);
+      let more = true;
+      while (more && this.channel) {
+        more = await this.dataSource.transaction(async (manager) => {
+          // SKIP LOCKED: con varias réplicas, cada evento lo publica solo una.
+          const rows = await manager
+            .createQueryBuilder(EventOutbox, 'outbox')
+            .setLock('pessimistic_write')
+            .setOnLocked('skip_locked')
+            .where('outbox.published_at IS NULL')
+            .orderBy('outbox.created_at', 'ASC')
+            .limit(BATCH_SIZE)
+            .getMany();
+
+          for (const row of rows) {
+            try {
+              await this.send(row);
+              row.publishedAt = new Date();
+              await manager.save(row);
+              this.logger.log(`Evento publicado: ${row.routingKey}`);
+            } catch (err) {
+              row.attempts += 1;
+              row.lastError = (err as Error).message.slice(0, 500);
+              await manager.save(row);
+              this.logger.warn(`No se pudo publicar '${row.routingKey}' (${row.id}); se reintentará: ${row.lastError}`);
+              return false;
+            }
+          }
+          return rows.length === BATCH_SIZE;
+        });
+      }
     } catch (err) {
-      this.logger.warn(`[degradado] no se pudo publicar '${routingKey}': ${(err as Error).message}`);
+      this.logger.error(`Error procesando el outbox: ${(err as Error).message}`);
+    } finally {
+      this.flushing = false;
     }
+  }
+
+  private async send(row: EventOutbox) {
+    const channel = this.channel;
+    if (!channel) throw new Error('RabbitMQ no está conectado');
+    const message = { event: row.routingKey, occurredAt: row.occurredAt.toISOString(), data: row.payload };
+    channel.publish(this.exchange, row.routingKey, Buffer.from(JSON.stringify(message)), {
+      persistent: true,
+      contentType: 'application/json',
+      messageId: row.id,
+    });
+    await channel.waitForConfirms();
   }
 }
