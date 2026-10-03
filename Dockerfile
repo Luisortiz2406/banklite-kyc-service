@@ -11,5 +11,6 @@ ENV NODE_ENV=production
 COPY package*.json ./
 RUN npm install --omit=dev
 COPY --from=build /app/dist ./dist
+COPY scripts/encrypt-kyc-fields.js ./scripts/encrypt-kyc-fields.js
 EXPOSE 3003
-CMD ["node", "dist/main"]
+CMD ["sh", "-c", "node scripts/encrypt-kyc-fields.js && node dist/main"]

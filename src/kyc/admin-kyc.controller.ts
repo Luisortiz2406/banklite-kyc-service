@@ -5,6 +5,7 @@ import { IsIn, IsInt, IsOptional, IsString, Max, MaxLength, Min } from 'class-va
 import { Brackets, Repository } from 'typeorm';
 import { StaffAuthGuard } from '../common/staff/staff-auth.guard';
 import { EventPublisherService } from '../events/event-publisher.service';
+import { blindIndex } from '../common/crypto/field-crypto';
 import { KycRecord } from './entities/kyc-record.entity';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -37,10 +38,11 @@ export class AdminKycController {
     if (term) {
       qb.andWhere(
         new Brackets((w) => {
+          // Documento y teléfono están cifrados: solo coincidencia exacta por índice ciego.
           w.where(`(k.nombres || ' ' || k.apellidos) ILIKE :like`, { like: `%${term}%` })
-            .orWhere('k.numeroDocumento LIKE :doc', { doc: `${term}%` })
             .orWhere('k.email ILIKE :like', { like: `%${term}%` })
-            .orWhere('k.telefono LIKE :tel', { tel: `%${term}%` });
+            .orWhere('k.numeroDocumentoHash = :hash', { hash: blindIndex(term) })
+            .orWhere('k.telefonoHash IN (:...phones)', { phones: [blindIndex(term), blindIndex(`+57${term.replace(/\D/g, '')}`)] });
           if (UUID.test(term)) w.orWhere('k.idUser = :id', { id: term });
         }),
       );

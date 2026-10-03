@@ -12,6 +12,7 @@ import { Repository, EntityManager } from 'typeorm';
 import { EventPublisherService } from '../events/event-publisher.service';
 import { SubmitKycDto } from './dto/submit-kyc.dto';
 import { UpdateContactDto } from './dto/update-contact.dto';
+import { blindIndex } from '../common/crypto/field-crypto';
 import { KycRecord } from './entities/kyc-record.entity';
 import { VerifikService } from './verifik.service';
 
@@ -21,7 +22,7 @@ const EDAD_MINIMA = 18;
 // cédula (CC, PPT) y antecedentes (CC, CE). Hoy la única intersección es CC.
 const TIPOS_VERIFICABLES_LIVE = ['CC'];
 
-type PublicKycRecord = Omit<KycRecord, 'submissionTokenHash'>;
+type PublicKycRecord = Omit<KycRecord, 'submissionTokenHash' | 'numeroDocumentoHash' | 'telefonoHash'>;
 type SubmitResult = PublicKycRecord & {
   provider?: IdentityProviderResult;
   submissionToken?: string;
@@ -55,7 +56,7 @@ export class KycService {
 
   /** Quita el hash del token antes de devolver el registro. */
   private publicRecord(record: KycRecord): PublicKycRecord {
-    const { submissionTokenHash: _omit, ...rest } = record;
+    const { submissionTokenHash: _omit, numeroDocumentoHash: _doc, telefonoHash: _tel, ...rest } = record;
     return rest;
   }
 
@@ -114,14 +115,14 @@ export class KycService {
     // Un documento solo puede estar asociado a una cuenta. La restricción
     // UNIQUE en la BD refuerza esta validación ante registros simultáneos.
     const documentoExistente = await this.records.findOne({
-      where: { numeroDocumento: datos.numeroDocumento },
+      where: { numeroDocumentoHash: blindIndex(datos.numeroDocumento) as string },
     });
     if (documentoExistente && documentoExistente.idUser !== datos.idUser) {
       throw new ConflictException('El número de documento ya está registrado en otra cuenta.');
     }
 
     if (datos.telefono?.trim()) {
-      const telefonoExistente = await this.records.findOne({ where: { telefono: datos.telefono.trim() } });
+      const telefonoExistente = await this.records.findOne({ where: { telefonoHash: blindIndex(datos.telefono) as string } });
       if (telefonoExistente && telefonoExistente.idUser !== datos.idUser && telefonoExistente.status === 'verified') {
         throw new ConflictException('Numero de telefono registrado en otra cuenta ');
       }
@@ -162,6 +163,9 @@ export class KycService {
 
   /** Guarda traduciendo las violaciones de unicidad (documento / teléfono) a 409. */
   private async saveRecord(record: KycRecord, manager?: EntityManager): Promise<KycRecord> {
+    // Índices ciegos de los campos cifrados (unicidad y búsqueda exacta).
+    record.numeroDocumentoHash = blindIndex(record.numeroDocumento);
+    record.telefonoHash = blindIndex(record.telefono);
     try {
       return await (manager ? manager.getRepository(KycRecord) : this.records).save(record);
     } catch (error) {

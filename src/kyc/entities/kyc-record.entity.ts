@@ -6,6 +6,7 @@ import {
   PrimaryGeneratedColumn,
   UpdateDateColumn,
 } from 'typeorm';
+import { encryptedColumn } from '../../common/crypto/field-crypto';
 
 /**
  * Tabla kyc_records.
@@ -16,6 +17,10 @@ import {
  * el navegador (localStorage) del frontend: ahora los datos personales viajan
  * al backend y, al quedar verificados, se publica el evento identity.verified
  * que Account Service consume para activar la cuenta.
+ *
+ * Documento, fechas y teléfono se guardan cifrados (AES-256-GCM, ver
+ * field-crypto.ts). Para unicidad y búsqueda exacta se usan los índices ciegos
+ * numero_documento_hash y telefono_hash, que asigna KycService al guardar.
  */
 @Entity('kyc_records')
 export class KycRecord {
@@ -35,14 +40,18 @@ export class KycRecord {
   @Column({ name: 'tipo_documento' })
   tipoDocumento: string; // CC | CE | PA
 
-  @Index({ unique: true })
-  @Column({ name: 'numero_documento' })
+  @Column({ name: 'numero_documento', type: 'varchar', transformer: encryptedColumn })
   numeroDocumento: string;
 
-  @Column({ name: 'fecha_nacimiento', type: 'date' })
+  @Index({ unique: true })
+  @Column({ name: 'numero_documento_hash', type: 'varchar', length: 64, nullable: true, select: false })
+  numeroDocumentoHash: string | null;
+
+  // 'YYYY-MM-DD' cifrado (antes era una columna date).
+  @Column({ name: 'fecha_nacimiento', type: 'varchar', transformer: encryptedColumn })
   fechaNacimiento: string;
 
-  @Column({ name: 'fecha_expedicion', type: 'date' })
+  @Column({ name: 'fecha_expedicion', type: 'varchar', transformer: encryptedColumn })
   fechaExpedicion: string;
 
   // type explícito: con strictNullChecks, `string | null` se emite como "Object" y TypeORM
@@ -50,9 +59,12 @@ export class KycRecord {
   @Column({ type: 'varchar', nullable: true })
   email: string | null;
 
-  @Index({ unique: true })
-  @Column({ type: 'varchar', nullable: true })
+  @Column({ type: 'varchar', nullable: true, transformer: encryptedColumn })
   telefono: string | null;
+
+  @Index({ unique: true })
+  @Column({ name: 'telefono_hash', type: 'varchar', length: 64, nullable: true, select: false })
+  telefonoHash: string | null;
 
   @Column({
     type: 'varchar',
