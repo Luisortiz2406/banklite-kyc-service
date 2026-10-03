@@ -7,6 +7,8 @@ import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { InternalKeyGuard } from '../common/guards/internal-key.guard';
 import { KycRecord } from './entities/kyc-record.entity';
 import { KycController } from './kyc.controller';
+import { AdminKycController } from './admin-kyc.controller';
+import { StaffAuthGuard } from '../common/staff/staff-auth.guard';
 import { KycService } from './kyc.service';
 import { VerifikService } from './verifik.service';
 
@@ -16,7 +18,8 @@ import { VerifikService } from './verifik.service';
     JwtModule.register({}), // solo se usa para verificar tokens emitidos por Auth Service
     TypeOrmModule.forFeature([KycRecord]),
   ],
-  controllers: [KycController],
-  providers: [KycService, EventPublisherService, JwtAuthGuard, InternalKeyGuard, VerifikService],
+  // AdminKycController primero: si no, /kyc/:id_user capturaría /kyc/admin.
+  controllers: [AdminKycController, KycController],
+  providers: [KycService, EventPublisherService, JwtAuthGuard, InternalKeyGuard, VerifikService, StaffAuthGuard],
 })
 export class KycModule {}
