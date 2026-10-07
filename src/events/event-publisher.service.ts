@@ -43,8 +43,28 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
   }
 
   async onModuleInit() {
+    await this.scrubIdentityPayloads();
     this.relayTimer = setInterval(() => void this.flush(), RELAY_INTERVAL_MS);
     await this.connect();
+  }
+
+  /**
+   * Versiones anteriores publicaban identity.verified con documento, nombre,
+   * nivel de riesgo y alertas en claro, y quedaban así en event_outbox. Se
+   * reducen al idUser (lo único que necesitan los consumidores). Idempotente.
+   */
+  private async scrubIdentityPayloads() {
+    try {
+      const [, affected] = await this.dataSource.query(
+        `UPDATE event_outbox
+            SET payload = jsonb_build_object('idUser', payload->'idUser')
+          WHERE routing_key = 'identity.verified'
+            AND payload - 'idUser' <> '{}'::jsonb`,
+      );
+      if (affected) this.logger.log(`Datos personales eliminados de ${affected} evento(s) identity.verified del outbox.`);
+    } catch (err) {
+      this.logger.warn(`No se pudo limpiar el outbox: ${(err as Error).message}`);
+    }
   }
 
   private async connect() {

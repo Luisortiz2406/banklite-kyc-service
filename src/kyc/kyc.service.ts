@@ -143,16 +143,10 @@ export class KycService {
           nombreCompleto: `${saved.nombres} ${saved.apellidos}`.trim(),
         }, manager);
       } else {
-        await this.events.publish('identity.verified', {
-          idUser: saved.idUser,
-          numeroDocumento: saved.numeroDocumento,
-          documentProvider: provider.document.provider,
-          backgroundProvider: provider.background.provider,
-          nombreCompleto: provider.document.nombreCompleto,
-          nivelRiesgo: provider.background.nivelRiesgo,
-          alertas: provider.background.alertas,
-          email: saved.email,
-        }, manager);
+        // Solo el idUser: el documento, el nombre, el nivel de riesgo y las
+        // alertas viven cifrados en kyc_db y no deben viajar en claro por el
+        // bus ni copiarse a otras bases. Account Service solo necesita el idUser.
+        await this.events.publish('identity.verified', { idUser: saved.idUser }, manager);
       }
       return saved;
     });

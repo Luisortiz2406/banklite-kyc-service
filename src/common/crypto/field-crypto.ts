@@ -16,12 +16,17 @@ const PREFIX = 'v1:';
 const IV_BYTES = 12;
 const TAG_BYTES = 16;
 
-let cachedKeys: { enc: Buffer; index: Buffer } | null | undefined;
+let cachedKeys: { enc: Buffer; index: Buffer } | undefined;
 
+/**
+ * Falla cerrado (igual que card-service): sin llave no se guarda ni se busca
+ * nada, en vez de escribir datos de identidad en texto plano o indexarlos con
+ * una llave conocida. validateEnv ya impide arrancar el servicio sin ella.
+ */
 function keys() {
-  if (cachedKeys !== undefined) return cachedKeys;
+  if (cachedKeys) return cachedKeys;
   const hex = process.env.KYC_ENCRYPTION_KEY;
-  if (!hex) return (cachedKeys = null);
+  if (!hex) throw new Error('KYC_ENCRYPTION_KEY no está configurada: no se pueden guardar datos de identidad.');
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error('KYC_ENCRYPTION_KEY debe tener exactamente 64 caracteres hexadecimales.');
   const enc = Buffer.from(hex, 'hex');
   return (cachedKeys = { enc, index: createHmac('sha256', enc).update('kyc-blind-index').digest() });
@@ -31,11 +36,10 @@ export function isEncrypted(value: unknown): boolean {
   return typeof value === 'string' && value.startsWith(PREFIX);
 }
 
-/** Sin llave (desarrollo local) guarda el valor tal cual; lo ya cifrado no se vuelve a cifrar. */
+/** Lo ya cifrado no se vuelve a cifrar. */
 export function encryptField(value: unknown): unknown {
   if (typeof value !== 'string' || isEncrypted(value)) return value;
   const k = keys();
-  if (!k) return value;
   const iv = randomBytes(IV_BYTES);
   const cipher = createCipheriv('aes-256-gcm', k.enc, iv);
   const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
@@ -46,18 +50,16 @@ export function encryptField(value: unknown): unknown {
 export function decryptField(value: unknown): unknown {
   if (!isEncrypted(value)) return value;
   const k = keys();
-  if (!k) throw new Error('Hay datos cifrados pero falta KYC_ENCRYPTION_KEY.');
   const raw = Buffer.from((value as string).slice(PREFIX.length), 'base64');
   const decipher = createDecipheriv('aes-256-gcm', k.enc, raw.subarray(0, IV_BYTES));
   decipher.setAuthTag(raw.subarray(IV_BYTES, IV_BYTES + TAG_BYTES));
   return Buffer.concat([decipher.update(raw.subarray(IV_BYTES + TAG_BYTES)), decipher.final()]).toString('utf8');
 }
 
-/** Índice ciego para búsquedas exactas y unicidad. Sin llave usa una fija (solo desarrollo). */
+/** Índice ciego para búsquedas exactas y unicidad. */
 export function blindIndex(value: string | null | undefined): string | null {
   if (value === null || value === undefined || value.trim() === '') return null;
-  const key = keys()?.index ?? Buffer.from('kyc-dev-blind-index');
-  return createHmac('sha256', key).update(value.trim().toLowerCase()).digest('hex');
+  return createHmac('sha256', keys().index).update(value.trim().toLowerCase()).digest('hex');
 }
 
 export const encryptedColumn: ValueTransformer = {

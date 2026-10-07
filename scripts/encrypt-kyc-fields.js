@@ -10,7 +10,7 @@ const { blindIndex, decryptField, encryptField, isEncrypted } = require('../dist
 
 async function main() {
   if (!process.env.KYC_ENCRYPTION_KEY) {
-    console.log('[kyc-crypto] KYC_ENCRYPTION_KEY no configurada: los datos se guardan sin cifrar.');
+    console.log('[kyc-crypto] KYC_ENCRYPTION_KEY no configurada: kyc-service no arrancará sin ella.');
     return;
   }
   const db = new Client({ connectionString: process.env.DATABASE_URL });
