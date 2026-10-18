@@ -42,15 +42,12 @@ export class KycController {
   @Get('status/:id_user')
   @UseGuards(InternalKeyGuard)
   async status(@Param('id_user', ParseUUIDPipe) idUser: string) {
-    return { idUser, ...await this.kycService.getIdentityStatus(idUser) };
+    return { idUser, ...(await this.kycService.getIdentityStatus(idUser)) };
   }
 
   @Get(':id_user')
   @UseGuards(JwtAuthGuard)
-  async findOne(
-    @Param('id_user', ParseUUIDPipe) idUser: string,
-    @Req() request: Request,
-  ) {
+  async findOne(@Param('id_user', ParseUUIDPipe) idUser: string, @Req() request: Request) {
     const user = (request as any).user as { idUser: string } | undefined;
     if (user && user.idUser !== idUser) {
       throw new ForbiddenException('No puedes consultar la verificación de otro usuario');

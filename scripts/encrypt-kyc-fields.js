@@ -49,8 +49,15 @@ async function main() {
             SET numero_documento = $2, numero_documento_hash = $3, fecha_nacimiento = $4,
                 fecha_expedicion = $5, telefono = $6, telefono_hash = $7
           WHERE id = $1`,
-        [r.id, encryptField(doc), blindIndex(doc), encryptField(plain(r.fecha_nacimiento)),
-         encryptField(plain(r.fecha_expedicion)), encryptField(tel), blindIndex(tel)],
+        [
+          r.id,
+          encryptField(doc),
+          blindIndex(doc),
+          encryptField(plain(r.fecha_nacimiento)),
+          encryptField(plain(r.fecha_expedicion)),
+          encryptField(tel),
+          blindIndex(tel),
+        ],
       );
     }
     await db.query('COMMIT');

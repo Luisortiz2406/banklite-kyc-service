@@ -203,10 +203,7 @@ export class VerifikService {
   // -------------------------------------------------------------- Helpers
 
   /** GET autenticado a Verifik. Errores del proveedor => 503 (no se culpa a la persona). */
-  private async consultar(
-    url: string,
-    params: Record<string, string>,
-  ): Promise<{ ok: boolean; payload: any }> {
+  private async consultar(url: string, params: Record<string, string>): Promise<{ ok: boolean; payload: any }> {
     const apiKey = this.config.get<string>('VERIFIK_API_KEY');
     if (!apiKey) {
       throw new ServiceUnavailableException('Verifik está en modo live pero falta VERIFIK_API_KEY.');

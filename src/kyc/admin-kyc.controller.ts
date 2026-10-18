@@ -42,13 +42,18 @@ export class AdminKycController {
           w.where(`(k.nombres || ' ' || k.apellidos) ILIKE :like`, { like: `%${term}%` })
             .orWhere('k.email ILIKE :like', { like: `%${term}%` })
             .orWhere('k.numeroDocumentoHash = :hash', { hash: blindIndex(term) })
-            .orWhere('k.telefonoHash IN (:...phones)', { phones: [blindIndex(term), blindIndex(`+57${term.replace(/\D/g, '')}`)] });
+            .orWhere('k.telefonoHash IN (:...phones)', {
+              phones: [blindIndex(term), blindIndex(`+57${term.replace(/\D/g, '')}`)],
+            });
           if (UUID.test(term)) w.orWhere('k.idUser = :id', { id: term });
         }),
       );
     }
     if (query.status) qb.andWhere('k.status = :status', { status: query.status });
-    const [items, total] = await qb.skip((page - 1) * limit).take(limit).getManyAndCount();
+    const [items, total] = await qb
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
     return { items, total, page, limit };
   }
 

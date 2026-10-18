@@ -61,7 +61,8 @@ export class EventPublisherService implements OnModuleInit, OnModuleDestroy {
           WHERE routing_key = 'identity.verified'
             AND payload - 'idUser' <> '{}'::jsonb`,
       );
-      if (affected) this.logger.log(`Datos personales eliminados de ${affected} evento(s) identity.verified del outbox.`);
+      if (affected)
+        this.logger.log(`Datos personales eliminados de ${affected} evento(s) identity.verified del outbox.`);
     } catch (err) {
       this.logger.warn(`No se pudo limpiar el outbox: ${(err as Error).message}`);
     }

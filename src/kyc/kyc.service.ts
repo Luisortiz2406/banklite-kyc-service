@@ -110,7 +110,7 @@ export class KycService {
     }
     // Token nuevo solo si el registro aún no tiene uno; en reenvíos se conserva.
     const nuevoToken = previo?.submissionTokenHash ? undefined : randomBytes(32).toString('hex');
-    const tokenHash = nuevoToken ? this.hashToken(nuevoToken) : previo?.submissionTokenHash ?? null;
+    const tokenHash = nuevoToken ? this.hashToken(nuevoToken) : (previo?.submissionTokenHash ?? null);
 
     // Un documento solo puede estar asociado a una cuenta. La restricción
     // UNIQUE en la BD refuerza esta validación ante registros simultáneos.
@@ -122,7 +122,9 @@ export class KycService {
     }
 
     if (datos.telefono?.trim()) {
-      const telefonoExistente = await this.records.findOne({ where: { telefonoHash: blindIndex(datos.telefono) as string } });
+      const telefonoExistente = await this.records.findOne({
+        where: { telefonoHash: blindIndex(datos.telefono) as string },
+      });
       if (telefonoExistente && telefonoExistente.idUser !== datos.idUser && telefonoExistente.status === 'verified') {
         throw new ConflictException('Numero de telefono registrado en otra cuenta ');
       }
@@ -137,11 +139,15 @@ export class KycService {
     record = await this.records.manager.transaction(async (manager) => {
       const saved = await this.saveRecord(record, manager);
       if (!provider.verified) {
-        await this.events.publish('identity.rejected', {
-          idUser: saved.idUser,
-          email: saved.email,
-          nombreCompleto: `${saved.nombres} ${saved.apellidos}`.trim(),
-        }, manager);
+        await this.events.publish(
+          'identity.rejected',
+          {
+            idUser: saved.idUser,
+            email: saved.email,
+            nombreCompleto: `${saved.nombres} ${saved.apellidos}`.trim(),
+          },
+          manager,
+        );
       } else {
         // Solo el idUser: el documento, el nombre, el nivel de riesgo y las
         // alertas viven cifrados en kyc_db y no deben viajar en claro por el
@@ -183,11 +189,7 @@ export class KycService {
   private async verificarIdentidad(dto: Omit<SubmitKycDto, 'submissionToken'>): Promise<IdentityProviderResult> {
     const nombreCompleto = `${dto.nombres} ${dto.apellidos}`.trim();
 
-    const verifikResult = await this.verifik.verifyDocument(
-      dto.numeroDocumento,
-      dto.tipoDocumento,
-      nombreCompleto,
-    );
+    const verifikResult = await this.verifik.verifyDocument(dto.numeroDocumento, dto.tipoDocumento, nombreCompleto);
 
     if (!verifikResult.matched) {
       return {
@@ -256,11 +258,15 @@ export class KycService {
       // La identidad se verifica antes de conocer el correo, así que la confirmación
       // por email se envía cuando llega el correo verificado (solo si cambió).
       if (record.status === 'verified' && record.email && record.email !== emailAnterior) {
-        await this.events.publish('identity.email_confirmed', {
-          idUser: record.idUser,
-          email: record.email,
-          nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
-        }, manager);
+        await this.events.publish(
+          'identity.email_confirmed',
+          {
+            idUser: record.idUser,
+            email: record.email,
+            nombreCompleto: `${record.nombres} ${record.apellidos}`.trim(),
+          },
+          manager,
+        );
       }
     });
     void this.events.flush();

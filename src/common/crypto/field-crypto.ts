@@ -27,7 +27,8 @@ function keys() {
   if (cachedKeys) return cachedKeys;
   const hex = process.env.KYC_ENCRYPTION_KEY;
   if (!hex) throw new Error('KYC_ENCRYPTION_KEY no está configurada: no se pueden guardar datos de identidad.');
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error('KYC_ENCRYPTION_KEY debe tener exactamente 64 caracteres hexadecimales.');
+  if (!/^[0-9a-fA-F]{64}$/.test(hex))
+    throw new Error('KYC_ENCRYPTION_KEY debe tener exactamente 64 caracteres hexadecimales.');
   const enc = Buffer.from(hex, 'hex');
   return (cachedKeys = { enc, index: createHmac('sha256', enc).update('kyc-blind-index').digest() });
 }

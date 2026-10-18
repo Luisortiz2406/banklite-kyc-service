@@ -1,13 +1,4 @@
-import {
-  IsEmail,
-  IsIn,
-  IsISO8601,
-  IsOptional,
-  IsString,
-  IsUUID,
-  Matches,
-  MinLength,
-} from 'class-validator';
+import { IsEmail, IsIn, IsISO8601, IsOptional, IsString, IsUUID, Matches, MinLength } from 'class-validator';
 
 const TIPOS_DOCUMENTO = ['CC', 'CE', 'PA'];
 

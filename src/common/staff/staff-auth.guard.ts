@@ -42,7 +42,11 @@ export class StaffAuthGuard implements CanActivate {
       throw new UnauthorizedException('El token no es de un empleado');
     }
 
-    (request as any).staff = { id: payload.sub, username: payload.username ?? payload.sub, role: payload.role } satisfies StaffPrincipal;
+    (request as any).staff = {
+      id: payload.sub,
+      username: payload.username ?? payload.sub,
+      role: payload.role,
+    } satisfies StaffPrincipal;
     return true;
   }
 }
