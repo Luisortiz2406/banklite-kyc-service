@@ -51,6 +51,7 @@ const compliance: StaffPrincipal = {
   username: 'cumplimiento1',
   role: 'compliance',
   docHash: staffDocHash(SECRET, '99887766'),
+  issuedAt: null,
 };
 
 describe('Aprobación manual de verificaciones de identidad', () => {
