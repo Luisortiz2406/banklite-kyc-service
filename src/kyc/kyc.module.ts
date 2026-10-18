@@ -5,7 +5,10 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { EventPublisherService } from '../events/event-publisher.service';
 import { JwtAuthGuard } from '../common/guards/jwt-auth.guard';
 import { InternalKeyGuard } from '../common/guards/internal-key.guard';
+import { AdminAudit } from '../common/staff/admin-audit.entity';
+import { AdminAuditService } from '../common/staff/admin-audit.service';
 import { KycRecord } from './entities/kyc-record.entity';
+import { KycReviewService } from './kyc-review.service';
 import { KycController } from './kyc.controller';
 import { AdminKycController } from './admin-kyc.controller';
 import { StaffAuthGuard } from '../common/staff/staff-auth.guard';
@@ -16,10 +19,19 @@ import { VerifikService } from './verifik.service';
   imports: [
     ConfigModule,
     JwtModule.register({}), // solo se usa para verificar tokens emitidos por Auth Service
-    TypeOrmModule.forFeature([KycRecord]),
+    TypeOrmModule.forFeature([KycRecord, AdminAudit]),
   ],
   // AdminKycController primero: si no, /kyc/:id_user capturaría /kyc/admin.
   controllers: [AdminKycController, KycController],
-  providers: [KycService, EventPublisherService, JwtAuthGuard, InternalKeyGuard, VerifikService, StaffAuthGuard],
+  providers: [
+    KycService,
+    KycReviewService,
+    AdminAuditService,
+    EventPublisherService,
+    JwtAuthGuard,
+    InternalKeyGuard,
+    VerifikService,
+    StaffAuthGuard,
+  ],
 })
 export class KycModule {}

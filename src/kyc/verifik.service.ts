@@ -1,8 +1,11 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { RejectionCode } from './rejection-rules';
 
 export interface VerifikResult {
   matched: boolean;
+  /** Motivo cuando no coincide (ver rejection-rules.ts). */
+  code?: RejectionCode;
   provider: 'verifik' | 'verifik-demo';
   nombreCompleto: string | null;
   message?: string;
@@ -10,6 +13,8 @@ export interface VerifikResult {
 
 export interface AntecedentesResult {
   cleared: boolean;
+  /** Motivo cuando no se aprueba (ver rejection-rules.ts). */
+  code?: RejectionCode;
   provider: 'verifik-antecedentes' | 'verifik-antecedentes-demo';
   nivelRiesgo: string;
   alertas: string[];
@@ -65,6 +70,7 @@ export class VerifikService {
     if (!TIPOS_CEDULA.includes(tipoDocumento)) {
       return {
         matched: false,
+        code: 'documento_tipo_no_soportado',
         provider: 'verifik',
         nombreCompleto: null,
         message: `La validación de documento solo admite: ${TIPOS_CEDULA.join(', ')}.`,
@@ -80,6 +86,7 @@ export class VerifikService {
     if (!ok || !payload?.data) {
       return {
         matched: false,
+        code: 'documento_no_encontrado',
         provider: 'verifik',
         nombreCompleto: null,
         message: 'El documento no fue encontrado en la fuente oficial.',
@@ -91,6 +98,7 @@ export class VerifikService {
       this.logger.warn(`Respuesta de cédula sin fullName. Campos recibidos: ${Object.keys(payload.data).join(', ')}`);
       return {
         matched: false,
+        code: 'documento_sin_nombre',
         provider: 'verifik',
         nombreCompleto: null,
         message: 'Verifik no devolvió el nombre asociado al documento.',
@@ -100,6 +108,7 @@ export class VerifikService {
     if (payload.data.isAlive === false) {
       return {
         matched: false,
+        code: 'documento_no_vigente',
         provider: 'verifik',
         nombreCompleto: nombreOficial,
         message: 'El documento figura como no vigente en la fuente oficial.',
@@ -112,6 +121,7 @@ export class VerifikService {
     } else if (!this.nombreCoincide(nombreCompletoIngresado, nombreOficial)) {
       return {
         matched: false,
+        code: 'nombre_no_coincide',
         provider: 'verifik',
         nombreCompleto: nombreOficial,
         message: 'El nombre ingresado no coincide con el registrado para ese documento.',
@@ -143,6 +153,7 @@ export class VerifikService {
     if (!TIPOS_POLICIA.includes(tipoDocumento)) {
       return {
         cleared: false,
+        code: 'antecedentes_tipo_no_soportado',
         provider: 'verifik-antecedentes',
         nivelRiesgo: 'no-evaluado',
         alertas: [],
@@ -178,6 +189,7 @@ export class VerifikService {
       );
       return {
         cleared: false,
+        code: 'antecedentes_no_confirmados',
         provider: 'verifik-antecedentes',
         nivelRiesgo: 'desconocido',
         alertas: [],
@@ -194,6 +206,7 @@ export class VerifikService {
     // No se guarda el texto de la Policía (dato sensible); solo una alerta genérica.
     return {
       cleared: false,
+      code: 'antecedentes_pendientes',
       provider: 'verifik-antecedentes',
       nivelRiesgo: 'alto',
       alertas: ['Registra asuntos pendientes con las autoridades judiciales'],

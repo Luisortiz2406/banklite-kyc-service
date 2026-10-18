@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { KycModule } from './kyc/kyc.module';
 import { KycRecord } from './kyc/entities/kyc-record.entity';
 import { EventOutbox } from './events/event-outbox.entity';
+import { AdminAudit } from './common/staff/admin-audit.entity';
 import { HealthController } from './health.controller';
 import { validateEnv } from './config/env.validation';
 
@@ -29,7 +30,7 @@ import { validateEnv } from './config/env.validation';
       useFactory: (config: ConfigService) => ({
         type: 'postgres',
         url: config.get<string>('DATABASE_URL'),
-        entities: [KycRecord, EventOutbox],
+        entities: [KycRecord, EventOutbox, AdminAudit],
         synchronize: true, // demo académica; en producción usar migraciones
         logging: false,
       }),

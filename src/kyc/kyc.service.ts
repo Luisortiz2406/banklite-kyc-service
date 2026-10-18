@@ -15,14 +15,16 @@ import { UpdateContactDto } from './dto/update-contact.dto';
 import { blindIndex } from '../common/crypto/field-crypto';
 import { KycRecord } from './entities/kyc-record.entity';
 import { VerifikService } from './verifik.service';
-
-const EDAD_MINIMA = 18;
+import { isInvalidIssueDate, isUnderage, RejectionCode } from './rejection-rules';
 
 // En modo live solo se aprueba si el documento pasa las DOS consultas de Verifik:
 // cédula (CC, PPT) y antecedentes (CC, CE). Hoy la única intersección es CC.
 const TIPOS_VERIFICABLES_LIVE = ['CC'];
 
-type PublicKycRecord = Omit<KycRecord, 'submissionTokenHash' | 'numeroDocumentoHash' | 'telefonoHash'>;
+type PublicKycRecord = Omit<
+  KycRecord,
+  'submissionTokenHash' | 'numeroDocumentoHash' | 'telefonoHash' | 'reviewedBy' | 'reviewedByRole' | 'reviewReason'
+>;
 type SubmitResult = PublicKycRecord & {
   provider?: IdentityProviderResult;
   submissionToken?: string;
@@ -30,6 +32,9 @@ type SubmitResult = PublicKycRecord & {
 
 interface IdentityProviderResult {
   verified: boolean;
+  /** Motivo del rechazo (ver rejection-rules.ts); null si se aprobó. */
+  rejectionCode: RejectionCode | null;
+  rejectionMessage: string | null;
   document: { provider: string; nombreCompleto: string | null; message?: string };
   background: { provider: string; nivelRiesgo: string; alertas: string[]; message?: string };
 }
@@ -56,7 +61,16 @@ export class KycService {
 
   /** Quita el hash del token antes de devolver el registro. */
   private publicRecord(record: KycRecord): PublicKycRecord {
-    const { submissionTokenHash: _omit, numeroDocumentoHash: _doc, telefonoHash: _tel, ...rest } = record;
+    const {
+      submissionTokenHash: _omit,
+      numeroDocumentoHash: _doc,
+      telefonoHash: _tel,
+      // Quién revisó a mano es dato interno del banco
+      reviewedBy: _by,
+      reviewedByRole: _role,
+      reviewReason: _reason,
+      ...rest
+    } = record;
     return rest;
   }
 
@@ -134,7 +148,12 @@ export class KycService {
     const status = provider.verified ? ('verified' as const) : ('rejected' as const);
 
     let record: KycRecord = previo ?? this.records.create({ ...datos, status });
-    Object.assign(record, datos, { status, submissionTokenHash: tokenHash });
+    Object.assign(record, datos, {
+      status,
+      submissionTokenHash: tokenHash,
+      rejectionCode: provider.rejectionCode,
+      rejectionMessage: provider.rejectionMessage?.slice(0, 300) ?? null,
+    });
     // Registro y evento en la misma transacción (outbox transaccional).
     record = await this.records.manager.transaction(async (manager) => {
       const saved = await this.saveRecord(record, manager);
@@ -194,6 +213,8 @@ export class KycService {
     if (!verifikResult.matched) {
       return {
         verified: false,
+        rejectionCode: verifikResult.code ?? 'documento_no_encontrado',
+        rejectionMessage: verifikResult.message ?? null,
         document: {
           provider: verifikResult.provider,
           nombreCompleto: verifikResult.nombreCompleto,
@@ -205,8 +226,11 @@ export class KycService {
 
     const antecedentes = await this.verifik.verifyAntecedentes(dto.numeroDocumento, dto.tipoDocumento);
 
+    const verified = verifikResult.matched && antecedentes.cleared;
     return {
-      verified: verifikResult.matched && antecedentes.cleared,
+      verified,
+      rejectionCode: verified ? null : (antecedentes.code ?? 'antecedentes_no_confirmados'),
+      rejectionMessage: verified ? null : (antecedentes.message ?? antecedentes.alertas[0] ?? null),
       document: {
         provider: verifikResult.provider,
         nombreCompleto: verifikResult.nombreCompleto,
@@ -274,22 +298,13 @@ export class KycService {
   }
 
   private validarMayoriaDeEdad(fechaNacimientoStr: string) {
-    const nacimiento = new Date(fechaNacimientoStr + 'T00:00:00Z');
-    const hoy = new Date();
-    let edad = hoy.getUTCFullYear() - nacimiento.getUTCFullYear();
-    const difMes = hoy.getUTCMonth() - nacimiento.getUTCMonth();
-    if (difMes < 0 || (difMes === 0 && hoy.getUTCDate() < nacimiento.getUTCDate())) edad--;
-    if (edad < EDAD_MINIMA) {
+    if (isUnderage(fechaNacimientoStr)) {
       throw new BadRequestException('El usuario debe ser mayor de 18 años para abrir una cuenta');
     }
   }
 
   private validarFechaExpedicion(fechaNacimientoStr: string, fechaExpedicionStr: string) {
-    const nacimiento = new Date(fechaNacimientoStr + 'T00:00:00Z');
-    const expedicion = new Date(fechaExpedicionStr + 'T00:00:00Z');
-    const fecha18 = new Date(nacimiento);
-    fecha18.setUTCFullYear(fecha18.getUTCFullYear() + 18);
-    if (expedicion < fecha18) {
+    if (isInvalidIssueDate(fechaNacimientoStr, fechaExpedicionStr)) {
       throw new BadRequestException(
         'La fecha de expedición del documento debe ser posterior a cuando el usuario cumplió 18 años',
       );

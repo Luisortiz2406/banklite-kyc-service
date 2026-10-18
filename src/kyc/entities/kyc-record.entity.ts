@@ -65,6 +65,28 @@ export class KycRecord {
   })
   status: 'verified' | 'rejected';
 
+  // Motivo del rechazo (código de rejection-rules.ts y mensaje de la fuente). Null en
+  // aprobados automáticos y en rechazos anteriores a que se guardara el motivo; si se
+  // aprueba a mano se conserva como historial.
+  @Column({ name: 'rejection_code', type: 'varchar', length: 40, nullable: true })
+  rejectionCode: string | null;
+
+  @Column({ name: 'rejection_message', type: 'varchar', length: 300, nullable: true })
+  rejectionMessage: string | null;
+
+  // Aprobación manual de un rechazo (Cumplimiento o Administración). También queda en admin_audit.
+  @Column({ name: 'reviewed_by', type: 'varchar', nullable: true })
+  reviewedBy: string | null;
+
+  @Column({ name: 'reviewed_by_role', type: 'varchar', nullable: true })
+  reviewedByRole: string | null;
+
+  @Column({ name: 'review_reason', type: 'varchar', length: 300, nullable: true })
+  reviewReason: string | null;
+
+  @Column({ name: 'reviewed_at', type: 'timestamptz', nullable: true })
+  reviewedAt: Date | null;
+
   // Hash SHA-256 del token que se entrega al primer envío de /kyc/submit.
   // Los reenvíos para el mismo idUser deben presentarlo, así nadie más puede
   // sobrescribir los datos de otra persona. select:false: nunca sale en respuestas.
