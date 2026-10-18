@@ -27,6 +27,8 @@ const TIPOS_POLICIA = ['CC', 'CE'];
 
 // Texto con el que la Policía indica que la persona no tiene antecedentes.
 const LEYENDA_LIMPIO = 'NO TIENE ASUNTOS PENDIENTES';
+// Verifik consulta fuentes oficiales (Registraduría, Policía): puede tardar.
+const VERIFIK_TIMEOUT_MS = 15_000;
 
 /**
  * Verifik en un solo proveedor:
@@ -231,7 +233,7 @@ export class VerifikService {
       response = await fetch(target, {
         method: 'GET',
         headers: { Accept: 'application/json', Authorization: `${scheme} ${apiKey}` },
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(VERIFIK_TIMEOUT_MS),
       });
     } catch (error) {
       this.logger.error(`Verifik no respondió (${target.pathname}): ${(error as Error).message}`);
