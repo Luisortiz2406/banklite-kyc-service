@@ -1,5 +1,7 @@
 # KYC Service (`kyc-service`)
 
+[![CI](https://github.com/Luisortiz2406/banklite-kyc-service/actions/workflows/ci.yml/badge.svg)](https://github.com/Luisortiz2406/banklite-kyc-service/actions/workflows/ci.yml)
+
 Verificación de identidad (Know Your Customer) con Verifik y custodia cifrada de los datos personales.
 
 Parte de **BankLite**, banco digital académico construido con microservicios. Cada
@@ -168,10 +170,26 @@ npm test
 
 ## Despliegue
 
-Desplegado en Railway (raíz del servicio: esta carpeta, `railway.json` con
-`healthcheckPath: /health`). El servicio no tiene dominio público propio: se accede
+Desplegado en Railway **desde este repositorio** (rama `main`): `railway.json` en la
+raíz define el build por `Dockerfile` y el health check en `/health`; cada push a
+`main` redespliega el servicio. El servicio no tiene dominio público propio: se accede
 por el gateway.
 
-- Estado del servicio y de su base: https://api-gateway-production-dd7f.up.railway.app/health (entrada `kyc-service`: `status` y `database` deben estar en `ok`)
+- Estado del servicio y de su base: [https://api-gateway-production-dd7f.up.railway.app/health](https://api-gateway-production-dd7f.up.railway.app/health) (entrada `kyc-service`: `status` y `database` deben estar en `ok`)
 - Rutas de este servicio: `https://api-gateway-production-dd7f.up.railway.app/kyc/...`
 - Aplicación web: https://frontend-production-eff3c.up.railway.app
+
+## Repositorios relacionados
+
+Servicios de BankLite con los que se comunica este. **Llama a** / **Lo llama**: HTTP
+por la red interna; **Recibe** / **Envía**: eventos en RabbitMQ. Cada uno vive y se
+despliega desde su propio repositorio.
+
+| Repositorio | Relación con este servicio |
+|---|---|
+| [banklite-api-gateway](https://github.com/Luisortiz2406/banklite-api-gateway) | **Lo llama:** punto de entrada público, le enruta las rutas de este servicio |
+| [banklite-auth-service](https://github.com/Luisortiz2406/banklite-auth-service) | **Lo llama:** estado de identidad y contacto verificado |
+| [banklite-account-service](https://github.com/Luisortiz2406/banklite-account-service) | **Envía:** `identity.verified` |
+| [banklite-notification-service](https://github.com/Luisortiz2406/banklite-notification-service) | **Envía:** `identity.rejected`, `identity.email_confirmed` |
+| [banklite-compliance-service](https://github.com/Luisortiz2406/banklite-compliance-service) | **Envía:** `identity.verified`, `identity.rejected` |
+| [banklite-rewards-service](https://github.com/Luisortiz2406/banklite-rewards-service) | **Lo llama:** nombre del cliente |
