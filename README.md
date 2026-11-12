@@ -168,6 +168,10 @@ estén en claro (por ejemplo, las de `database/seed.sql`) y llena los índices c
 npm test
 ```
 
+Se prueba el flujo de verificación de identidad (`kyc.service.spec.ts`: aprobada y rechazada, menor de edad y expedición inválida, unicidad de documento y teléfono, token de envío), la integración con Verifik en modo demo y live con `fetch` simulado (`verifik.service.spec.ts`; nunca se llama al proveedor real), las reglas duras de rechazo, el cifrado de datos de identidad, el outbox de eventos, los controladores, los guards, `/health` y la validación de configuración. Las pruebas de este servicio no necesitan base de datos.
+
+**Cobertura:** el pipeline la muestra en el resumen de cada corrida y exige un mínimo de 70 % de líneas y 50 % de ramas (`umbral-lineas` y `umbral-ramas` en `deploy.yml`). Hoy está en 93,8 % de líneas y 90,4 % de ramas.
+
 ## Despliegue
 
 Lo despliega **GitHub Actions** (`.github/workflows/deploy.yml`, que usa el workflow
