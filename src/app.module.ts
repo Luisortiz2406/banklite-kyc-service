@@ -7,9 +7,11 @@ import { EventOutbox } from './events/event-outbox.entity';
 import { AdminAudit } from './common/staff/admin-audit.entity';
 import { HealthController } from './health.controller';
 import { validateEnv } from './config/env.validation';
+import { MetricsModule } from './metrics/metrics.module';
 
 @Module({
   imports: [
+    MetricsModule,
     ConfigModule.forRoot({
       isGlobal: true,
       envFilePath: '.env',
