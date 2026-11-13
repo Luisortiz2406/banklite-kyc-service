@@ -171,6 +171,25 @@ npm test
 
 Se prueba el flujo de verificación de identidad (`kyc.service.spec.ts`: aprobada y rechazada, menor de edad y expedición inválida, unicidad de documento y teléfono, token de envío), la integración con Verifik en modo demo y live con `fetch` simulado (`verifik.service.spec.ts`; nunca se llama al proveedor real), las reglas duras de rechazo, el cifrado de datos de identidad, el outbox de eventos, los controladores, los guards, `/health` y la validación de configuración. Las pruebas de este servicio no necesitan base de datos.
 
+### Prueba de integración: registro de identidad de punta a punta
+
+Archivo: `src/kyc/kyc.integration.spec.ts` (suite «Registro de identidad de punta a punta (HTTP, reglas, Verifik simulado y eventos)»).
+
+La petición HTTP real (supertest) recorre el controlador, los guards (`InternalKeyGuard`), `KycService` (reglas de negocio), `VerifikService` (la comunicación con el proveedor externo, con `fetch` simulado) y el publicador de eventos. Solo se simulan los bordes: el repositorio es una tabla en memoria con las mismas consultas por índice ciego que usa el servicio, y no se llama a Verifik real. Casos:
+
+- Verificada: documento y antecedentes limpios → 201, se consulta a Verifik dos veces con el token configurado y se publica `identity.verified` solo con el `idUser`.
+- `GET /kyc/status/:id_user` con la clave interna de auth → 200; sin clave o con otra → 401.
+- Antecedentes pendientes → rechazada (`antecedentes_pendientes`) y se publica `identity.rejected`.
+- Nombre que no coincide → rechazada sin consultar antecedentes.
+- Menor de edad → 400 sin tocar a Verifik, la base ni el bus.
+- Documento ya registrado en otra cuenta → 409.
+- Reenvío del mismo `idUser`: sin el token del primer envío → 403; con él se reevalúa y no se emite otro token.
+- Verifik caído → 503 sin guardar ni publicar; cuerpo mal formado → 400.
+
+```bash
+npm test -- kyc.integration        # solo esta prueba (no necesita base de datos)
+```
+
 **Cobertura:** el pipeline la muestra en el resumen de cada corrida y exige un mínimo de 70 % de líneas y 50 % de ramas (`umbral-lineas` y `umbral-ramas` en `deploy.yml`). Hoy está en 93,8 % de líneas y 90,4 % de ramas.
 
 ## Despliegue
